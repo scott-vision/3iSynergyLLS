@@ -65,7 +65,22 @@ def mean(values: Iterable[Optional[float]]) -> Optional[float]:
     return sum(real_values) / len(real_values)
 
 
+def ensure_target_slide(sb: SBAccess) -> Optional[int]:
+    try:
+        slide_id = int(sb.GetCurrentSlideId())
+        if slide_id <= 0:
+            logging.warning("GetCurrentSlideId returned invalid slide id: %s", slide_id)
+            return None
+        sb.SetTargetSlide(slide_id)
+        logging.info("SetTargetSlide current slide id: %s", slide_id)
+        return slide_id
+    except Exception:
+        logging.exception("Failed to set target slide to current slide")
+        return None
+
+
 def get_num_captures(sb: SBAccess) -> Optional[int]:
+    ensure_target_slide(sb)
     try:
         return int(sb.GetNumCaptures())
     except Exception:
@@ -423,6 +438,7 @@ def main() -> int:
         sock.connect((args.host, int(args.port)))
         sb = SBAccess(sock)
         logging.info("Connected")
+        ensure_target_slide(sb)
 
         sequence_index = 0
         for pair_index in range(1, args.repeat + 1):
