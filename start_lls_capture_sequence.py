@@ -83,20 +83,11 @@ def wait_until_not_capturing(sb: SBAccess, poll_seconds: float, log_polls: bool)
         time.sleep(poll_seconds)
 
 
-def send_start_command(
-    sb: SBAccess,
-    *,
-    xml_path: Path,
-    command_mode: str,
-    command_name: str,
-) -> bool:
-    if command_mode == "send-string-param":
-        return bool(sb.SendStringParam(command_name, str(xml_path)))
-    if command_mode == "run-saved-script":
-        return bool(sb.RunSavedScript(str(xml_path)))
-    if command_mode == "run-user-script":
-        return bool(sb.RunUserScript(xml_path.read_text(encoding="utf-8")))
-    raise ValueError(f"Unsupported command mode: {command_mode}")
+def start_lls_capture(sb: SBAccess, xml_path: Path) -> int:
+    xml_text = xml_path.read_text(encoding="utf-8")
+    if not xml_text.strip():
+        raise ValueError(f"XML file is empty: {xml_path}")
+    return int(sb.StartLLSCapture(xml_text))
 
 
 def run_one_capture(
@@ -110,8 +101,6 @@ def run_one_capture(
     start_timeout_seconds: float,
     slide_timeout_seconds: float,
     log_polls: bool,
-    command_mode: str,
-    command_name: str,
 ) -> CaptureTiming:
     logging.info("Preparing %s capture %d from %s", label, sequence_index, xml_path)
     wait_until_not_capturing(sb, poll_seconds, log_polls)
@@ -141,15 +130,13 @@ def run_one_capture(
     error: Optional[str] = None
 
     try:
-        if not send_start_command(
-            sb,
-            xml_path=xml_path,
-            command_mode=command_mode,
-            command_name=command_name,
-        ):
-            raise RuntimeError(
-                f"SlideBook start command returned false: {command_mode}"
-            )
+        capture_id = start_lls_capture(sb, xml_path)
+        logging.info(
+            "START_LLS_CAPTURE_RETURNED sequence=%d label=%s capture_id=%s",
+            sequence_index,
+            label,
+            capture_id,
+        )
         command_returned_mono = monotonic()
         command_returned_iso = timestamp()
         logging.info(
@@ -326,7 +313,7 @@ def build_summary(timings: list[CaptureTiming]) -> dict[str, object]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Alternate two SlideBook LLS XML capture commands and time capture start/end "
+            "Alternate two SlideBook LLS XML captures and time capture start/end "
             "using only SBAccess calls."
         )
     )
@@ -372,23 +359,6 @@ def parse_args() -> argparse.Namespace:
         help="Directory for log, csv, and summary files. Default: this script folder.",
     )
     parser.add_argument(
-        "--command-mode",
-        choices=("send-string-param", "run-saved-script", "run-user-script"),
-        default="send-string-param",
-        help=(
-            "How to send each XML to SlideBook. Default uses "
-            "SBAccess.SendStringParam(command_name, xml_path)."
-        ),
-    )
-    parser.add_argument(
-        "--command-name",
-        default="StartLLSCaptures",
-        help=(
-            "SlideBook command name used with --command-mode send-string-param. "
-            "Default: StartLLSCaptures."
-        ),
-    )
-    parser.add_argument(
         "--no-poll-log",
         action="store_true",
         help="Do not write every IsCapturing poll to the detailed log.",
@@ -399,8 +369,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     # Hard-code your XML paths here if you do not want to pass --xml-a/--xml-b.
     # CLI values still win when supplied.
-    hardcoded_xml_a = ""
-    hardcoded_xml_b = ""
+    hardcoded_xml_a = r"C:\Users\3i\Documents\GitHub\3iSynergyLLS\488_only.xml"
+    hardcoded_xml_b = r"C:\Users\3i\Documents\GitHub\3iSynergyLLS\488_560.xml"
 
     args = parse_args()
     xml_a_value = args.xml_a or hardcoded_xml_a
@@ -468,8 +438,6 @@ def main() -> int:
                     start_timeout_seconds=float(args.start_timeout_seconds),
                     slide_timeout_seconds=float(args.slide_timeout_seconds),
                     log_polls=not bool(args.no_poll_log),
-                    command_mode=str(args.command_mode),
-                    command_name=str(args.command_name),
                 )
                 timings.append(timing)
                 if timing.result == "error":
