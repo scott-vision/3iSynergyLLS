@@ -17,10 +17,12 @@ from CMetadataLib import CFluorDef70
 from CMetadataLib import COptovarDef70
 from enum import Enum
 import yaml
+import traceback
 
 from dataclasses import dataclass
 import ByteUtil as bu
 import numpy as np
+from typing import Optional
 
 
 @dataclass
@@ -337,31 +339,44 @@ class SBAccess(object):
         theBytes = bu.type_to_bytes(inVal,inType)
         self.mSocket.send(theBytes)
 
-    def mysend(self, inBytes):
-        totalsent = 0
-        MSGLEN = len(inBytes)
-        while totalsent < MSGLEN:
-            sent = self.mSocket.send(inBytes[totalsent:])
-            #print("sent: ",sent)
+    def SendByteArray(self,inData,chunk_size=4 * 1024 * 1024):
+        view = memoryview(inData)
+        total_sent = 0
+        msg_len = len(view)
+
+        while total_sent < msg_len:
+            end = min(total_sent + chunk_size, msg_len)
+            sent = self.mSocket.send(view[total_sent:end])
             if sent == 0:
-                raise Exception("Socket connection broken, unable to send")
-            totalsent = totalsent + sent
-        #print("totalsent: ",totalsent)
+                raise RuntimeError("Socket connection broken, unable to send")
+            total_sent += sent
 
-    def SendByteArray(self,inBytes):
-        #self.mSocket.send(inBytes)
-        self.mysend(inBytes)
+    def RecvBigData(self, n):
+        #print("In RecvBigData, expect size", n)
 
-    def RecvBigData(self,n):
-        # Helper function to recv n bytes or return None if EOF is hit
         data = bytearray()
-        while len(data) < n:
-            packet = self.mSocket.recv(n - len(data))
-            if not packet:
-                return None
-            data.extend(packet)
-        return data
+        chunk_size = 256 * 1024 * 1024   # 256 MB
 
+        try:
+            while len(data) < n:
+                remaining = n - len(data)
+                this_chunk = min(remaining, chunk_size)
+                #print("In RecvBigData, remaining", remaining, " this_chunk ",this_chunk)
+
+                packet = self.mSocket.recv(this_chunk)
+                if not packet:
+                    print("In RecvBigData, no packet")
+                    return None
+
+                #print("In RecvBigData, packet read size", len(packet))
+                data.extend(packet)
+
+            return data
+        except Exception as e:
+            print(f"RecvBigData error type: {type(e).__name__}")
+            print(f"RecvBigData error repr: {e!r}")
+            traceback.print_exc()
+        raise
     def Recv(self):
 
         theRecvBuf = b''
@@ -402,6 +417,8 @@ class SBAccess(object):
             theSize = 8
 
         theValBuf = b''
+        #print("about to enter RecvBigData: "," theNum ",theNum, " theSize ",theSize)
+
         theValBuf =  self.RecvBigData(theNum * theSize)
         #print('theValBuf is: ',theValBuf)
 
@@ -414,6 +431,20 @@ class SBAccess(object):
         else:
             theArr = bu.bytes_to_type(theValBuf,theType)
             return theNum,theArr
+
+    def RecvDataIntoArray(self, arr, expected_dtype=np.uint16):
+        if arr.dtype != expected_dtype:
+            raise ValueError(f"Expected dtype {expected_dtype}, got {arr.dtype}")
+
+        view = memoryview(arr).cast('B')
+        total = 0
+
+        while total < view.nbytes:
+            nrecv = self.mSocket.recv_into(view[total:])
+            if nrecv == 0:
+                raise RuntimeError("Socket closed before image was fully received")
+            total += nrecv
+
         
     def SendIntParam(self,inCommandName,inIntParam):
         self.SendCommand('$'+inCommandName+'(IntParam=i4)')
@@ -1156,6 +1187,171 @@ class SBAccess(object):
         theStr = self.Recv()
         return theStr
 
+    def GetIsLLSCapture(self,inCaptureIndex):
+        """ Returns whether the selected image contains LLS metadata
+
+        Parameters
+        ----------
+        inCaptureIndex: int
+            The index of the image group. Must be in range(0,number of captures)
+
+        Returns
+        -------
+        bool
+            True if the image is LLS, false if it is not
+        """
+        self.SendCommand('$GetIsLLSCapture(CaptureIndex=i4)')
+        self.SendVal(int(inCaptureIndex),'i4')
+
+        theNum, Result = self.Recv()
+
+        if (Result[0] > 0):
+            theReturnResult = True
+        else:
+            theReturnResult = False
+
+        return theReturnResult
+
+
+    def GetLLSXML(self,inCaptureIndex):
+        """ Gets the LLS XML metadata
+
+        Parameters
+        ----------
+        inCaptureIndex: int
+            The index of the image group. Must be in range(0,number of captures)
+
+        Returns
+        -------
+        str
+            The XML Metadata
+        bool   
+            True if the XMLS is valid, false if not
+        """
+        self.SendCommand('$GetLLSXML(CaptureIndex=i4)')
+        self.SendVal(int(inCaptureIndex),'i4')
+
+        theXML = self.Recv()
+
+        theNum, Result = self.Recv()
+
+        if (Result[0] > 0):
+            theReturnResult = True
+        else:
+            theReturnResult = False
+
+        return theXML, theReturnResult
+
+    def GetIsMLSCapture(self,inCaptureIndex):
+        """ Returns whether the selected image contains MLS metadata
+
+        Parameters
+        ----------
+        inCaptureIndex: int
+            The index of the image group. Must be in range(0,number of captures)
+
+        Returns
+        -------
+        bool
+            True if the image is MLS, false if it is not
+        """
+        self.SendCommand('$GetIsMLSCapture(CaptureIndex=i4)')
+        self.SendVal(int(inCaptureIndex),'i4')
+
+        theNum, Result = self.Recv()
+
+        if (Result[0] > 0):
+            theReturnResult = True
+        else:
+            theReturnResult = False
+
+        return theReturnResult
+
+
+    def GetMLSXML(self,inCaptureIndex):
+        """ Gets the MLS XML metadata
+
+        Parameters
+        ----------
+        inCaptureIndex: int
+            The index of the image group. Must be in range(0,number of captures)
+
+        Returns
+        -------
+        str
+            The XML Metadata
+        bool   
+            True if the XML is valid, false if not
+        """
+        self.SendCommand('$GetMLSXML(CaptureIndex=i4)')
+        self.SendVal(int(inCaptureIndex),'i4')
+
+        theXML = self.Recv()
+
+        theNum, Result = self.Recv()
+
+        if (Result[0] > 0):
+            theReturnResult = True
+        else:
+            theReturnResult = False
+
+        return theXML, theReturnResult
+            
+    def GetIsCTLSCapture(self,inCaptureIndex):
+        """ Returns whether the selected image contains CTLS metadata
+
+        Parameters
+        ----------
+        inCaptureIndex: int
+            The index of the image group. Must be in range(0,number of captures)
+
+        Returns
+        -------
+        bool
+            True if the image is CTLS, false if it is not
+        """
+        self.SendCommand('$GetIsCTLSCapture(CaptureIndex=i4)')
+        self.SendVal(int(inCaptureIndex),'i4')
+
+        theNum, Result = self.Recv()
+
+        if (Result[0] > 0):
+            theReturnResult = True
+        else:
+            theReturnResult = False
+
+        return theReturnResult
+
+
+    def GetCTLSXML(self,inCaptureIndex):
+        """ Gets the CTLS XML metadata
+
+        Parameters
+        ----------
+        inCaptureIndex: int
+            The index of the image group. Must be in range(0,number of captures)
+
+        Returns
+        -------
+        str
+            The XML Metadata
+        bool   
+            True if the XML is valid, false if not
+        """
+        self.SendCommand('$GetCTLSXML(CaptureIndex=i4)')
+        self.SendVal(int(inCaptureIndex),'i4')
+
+        theXML = self.Recv()
+
+        theNum, Result = self.Recv()
+
+        if (Result[0] > 0):
+            theReturnResult = True
+        else:
+            theReturnResult = False
+
+        return theXML, theReturnResult
+
     def GetLensName(self,inCaptureIndex):
         """ Gets the name of the lens of an image group
 
@@ -1174,6 +1370,7 @@ class SBAccess(object):
 
         theStr = self.Recv()
         return theStr
+
 
     def GetMagnification(self,inCaptureIndex):
         """ Gets the magnification of the lens of an image group
@@ -1329,6 +1526,44 @@ class SBAccess(object):
 
         theStr = self.Recv()
         return theStr
+
+    def GetCameraProperties(self,inCameraIndex):
+        """ Gets the width, height and pixel pitch (if known) of a camera
+
+        Parameters
+        ----------
+        inCameraIndex: int
+            The index of the camera (1-6)
+
+        Returns
+        -------
+        Width: int
+            camera full-chip width
+        Height: int
+            camera full-chip height
+        Pixel size: float
+            sensor pixel dimension in microns (0 if not available)
+        Camera name: str
+            Descriptive camera name
+        Result: bool
+            True if success, false if failure   
+
+        """
+        self.SendCommand('$GetCameraProperties(CameraIndex=i4)')
+        self.SendVal(int(inCameraIndex),'i4')
+
+        theNum, Width = self.Recv()
+        theNum, Height = self.Recv()
+        theNum, Microns = self.Recv()
+        Name = self.Recv()
+        theNum, Result = self.Recv()
+
+        if (Result[0] > 0):
+            theReturnResult = True
+        else:
+            theReturnResult = False
+
+        return Width[0], Height[0], Microns[0], Name, theReturnResult
 
     def GetHardwareProperty(self,inSetName, inPropertyName):
         """ Obtains the text value of a hardware property
@@ -1712,7 +1947,47 @@ class SBAccess(object):
         return theWidth[0], theHeight[0], theVals, theResult
 
 
-    def ReadImagePlaneBufIx(self,inCaptureIndex,inImageIndex,inZPlaneIndex,inChannelIndex):
+    def ReadAllImagePlanes(self,inCaptureIndex,inImageIndex,inChannelIndex,inReadOneScoop=True,ioArr: Optional[np.ndarray] = None):
+        """ Reads all the z planes of an image into a numpy array
+
+        Parameters
+        ----------
+        inCaptureIndex: int
+            The index of the image group. Must be in range(0,number of captures)
+        inImageIndex: int
+            The Image index (or Timepoint for non montage data)
+        inChannelIndex: int
+            The channel number
+        inReadOneScoop: int
+            If true, have SB read the whole image in one scopp, else read it a plane at a time to use much less memory 
+        ioArr: optional np uint16 array
+            An optional Numpy uint16 preallocated array to receive the image
+            To preallocate, use something like: np.empty(theNumRows*theNumColumns*theNumPlanes,np.uint16)
+            If ioArr is not specified, the array is returned as 1D numpy uint16 array
+
+
+        Returns
+        -------
+        if ioArr is specified, then it will return a 0 for failure, or 1 for success
+        otherwise it will return the image as 1D numpy uint16 array
+
+        """
+        self.SendCommand('$ReadAllImagePlanes(CaptureIndex=i4,ImageIndex=i4,ChannelIndex=i4,ReadOneScoop=i4,SendHeader=i4)')
+        self.SendVal(int(inCaptureIndex),'i4')
+        self.SendVal(int(inImageIndex),'i4')
+        self.SendVal(int(inChannelIndex),'i4')
+        self.SendVal(int(inReadOneScoop),'i4')
+        if ioArr is None:
+            theSendHeader = 1
+            self.SendVal(int(theSendHeader),'i4')
+            theNum,theVals = self.Recv()
+            return theVals
+        else:
+            theSendHeader = 0
+            self.SendVal(int(theSendHeader),'i4')
+            self.RecvDataIntoArray(ioArr)
+
+    def ReadImagePlaneBufIx(self,inCaptureIndex,inImageIndex,inZPlaneIndex,inChannelIndex,ioArr: Optional[np.ndarray] = None):
         """ Reads a z plane of an image into a numpy array
 
         Parameters
@@ -1720,29 +1995,42 @@ class SBAccess(object):
         inCaptureIndex: int
             The index of the image group. Must be in range(0,number of captures)
         inImageIndex: int
-            The Image index
+            The Image index (or Timepoint for non montage data)
         inZPlaneIndex: int
             The z plane number
         inChannelIndex: int
             The channel number
+        ioArr: 
+            An optional Numpy uint16 preallocated array to receive the image
+            To preallocate, use something like: np.empty(theNumRows*theNumColumns,np.uint16)
+            If ioArr is not specified, the array is returned as 1D numpy uint16 array
 
         Returns
         -------
-        numpy uint16 array 
-            The image is returned as 1D numpy uint16 array
+        if ioArr is specified, then it will return a 0 for failure, or 1 for success
+        otherwise it will return the image as 1D numpy uint16 array
 
         """
-        self.SendCommand('$ReadImagePlaneBuf(CaptureIndex=i4,ImageIndex=i4,ZPlaneIndex=i4,ChannelIndex=i4)')
+        self.SendCommand('$ReadImagePlaneBuf(CaptureIndex=i4,ImageIndex=i4,ZPlaneIndex=i4,ChannelIndex=i4,SendHeader=i4)')
         self.SendVal(int(inCaptureIndex),'i4')
         self.SendVal(int(inImageIndex),'i4')
         self.SendVal(int(inZPlaneIndex),'i4')
         self.SendVal(int(inChannelIndex),'i4')
+        if ioArr is None:
+            theSendHeader = 1
+            self.SendVal(int(theSendHeader),'i4')
+            theNum,theVals = self.Recv()
+            return theVals
+        else:
+            theSendHeader = 0
+            self.SendVal(int(theSendHeader),'i4')
+            self.RecvDataIntoArray(ioArr)
+            return 1
 
-        theNum,theVals = self.Recv()
-        return theVals
+            
 
 
-    def ReadImagePlaneBuf(self,inCaptureIndex,inPositionIndex,inTimepointIndex,inZPlaneIndex,inChannelIndex):
+    def ReadImagePlaneBuf(self,inCaptureIndex,inPositionIndex,inTimepointIndex,inZPlaneIndex,inChannelIndex,ioArr: Optional[np.ndarray] = None):
         """ Reads a z plane of an image into a numpy array
 
         Parameters
@@ -1757,22 +2045,33 @@ class SBAccess(object):
             The z plane number
         inChannelIndex: int
             The channel number
+        ioArr: 
+            An optional Numpy uint16 preallocated array to receive the image
+            To preallocate, use something like: np.empty(theNumRows*theNumColumns,np.uint16)
+            If ioArr is not specified, the array is returned as 1D numpy uint16 array
 
         Returns
         -------
-        numpy uint16 array 
-            The image is returned as 1D numpy uint16 array
+        if ioArr is specified, then it will return a 0 for failure, or 1 for success
+        otherwise it will return the image as 1D numpy uint16 array
 
         """
-        self.SendCommand('$ReadImagePlaneBuf(CaptureIndex=i4,PositionIndex=i4,TimepointIndex=i4,ZPlaneIndex=i4,ChannelIndex=i4)')
+        self.SendCommand('$ReadImagePlaneBuf(CaptureIndex=i4,PositionIndex=i4,TimepointIndex=i4,ZPlaneIndex=i4,ChannelIndex=i4,SendHeader=i4)')
         self.SendVal(int(inCaptureIndex),'i4')
         self.SendVal(int(inPositionIndex),'i4')
         self.SendVal(int(inTimepointIndex),'i4')
         self.SendVal(int(inZPlaneIndex),'i4')
         self.SendVal(int(inChannelIndex),'i4')
-
-        theNum,theVals = self.Recv()
-        return theVals
+        if ioArr is None:
+            theSendHeader = 1
+            self.SendVal(int(theSendHeader),'i4')
+            theNum,theVals = self.Recv()
+            return theVals
+        else:
+            theSendHeader = 0
+            self.SendVal(int(theSendHeader),'i4')
+            self.RecvDataIntoArray(ioArr)
+            return 1
 
 
     def GetAuxDataNumElements(self, inCaptureIndex, inDataType : AuxDataTypes):
@@ -1993,7 +2292,7 @@ class SBAccess(object):
         none
         """
         
-        self.SendCommand('$SerVoxelSize(CaptureIndex=i4,SizeX=f4,SizeY=f4,SizeZ=f4)')
+        self.SendCommand('$SetVoxelSize(CaptureIndex=i4,SizeX=f4,SizeY=f4,SizeZ=f4)')
         self.SendVal(int(inCaptureIndex),'i4')
         self.SendVal(float(inSizeX),'f4')
         self.SendVal(float(inSizeY),'f4')
@@ -2065,14 +2364,53 @@ class SBAccess(object):
         -------
         none
         """
-        theBytes = inNumpyArray.tobytes()
+        #theBytes = inNumpyArray.tobytes()
+        theBytes = memoryview(inNumpyArray).cast('B')
         l = len(theBytes)
 
-        self.SendCommand('$WriteImagePlaneBuf(CaptureIndex=i4,TimepointIndex=i4,ZPlaneIndex=i4,ChannelIndex=i4,ByteArray='+str(l)+':b)')
+
+        self.SendCommand('$WriteImagePlaneBuf(CaptureIndex=i4,TimepointIndex=i4,ZPlaneIndex=i4,ChannelIndex=i4,ByteArraySize=i8)')
         self.SendVal(int(inCaptureIndex),'i4')
         self.SendVal(int(inTimepointIndex),'i4')
         self.SendVal(int(inZPlaneIndex),'i4')
         self.SendVal(int(inChannelIndex),'i4')
+        self.SendVal(int(l),'i8')
+
+        self.SendByteArray(theBytes);
+
+        theNum,theVals = self.Recv()
+        if( theNum != 1 and theVals[0] != 1):
+            raise Exception("WriteImagePlaneBuf: error")
+    
+    def WriteAllImagePlanes(self,inCaptureIndex,inImageIndex,inChannelIndex,inNumpyArray):
+        """ Writes all planes of an image from a numpy array
+
+        Parameters
+        ----------
+        inCaptureIndex: int
+            The index of the image group. Must be in range(0,number of captures)
+        inImageIndex: int
+            The image index or time point in a non montage image
+        inChannelIndex: int
+            The channel number. If the channel number (they start at 0) is equal to the number of channels, then a new channel is added
+        inNumpyArray: numpy array of u2 (unsigned 16 bit integer)
+            The data buffer for the plane to be written
+
+        Returns
+        -------
+        none
+        """
+        #theBytes = inNumpyArray.tobytes()
+        theBytes = memoryview(inNumpyArray).cast('B')
+        l = len(theBytes)
+
+
+        #self.SendCommand('$WriteAllImagePlanes(CaptureIndex=i4,ImageIndex=i4,ChannelIndex=i4,ByteArray='+str(l)+':b)')
+        self.SendCommand('$WriteAllImagePlanes(CaptureIndex=i4,ImageIndex=i4,ChannelIndex=i4,ByteArraySize=i8)')
+        self.SendVal(int(inCaptureIndex),'i4')
+        self.SendVal(int(inImageIndex),'i4')
+        self.SendVal(int(inChannelIndex),'i4')
+        self.SendVal(int(l),'i8')
         self.SendByteArray(theBytes);
 
         theNum,theVals = self.Recv()
@@ -2081,7 +2419,48 @@ class SBAccess(object):
     
     # Mask fucntions
 
-    def ReadMaskPlaneBuf(self,inCaptureIndex,inMaskIndex,inTimepointIndex,inZPlaneIndex):
+    def ReadAllMaskPlanes(self,inCaptureIndex,inMaskIndex,inImageIndex,inReadOneScoop=True,ioArr: Optional[np.ndarray] = None):
+        """ Reads all the z planes of a mask into a numpy array
+
+        Parameters
+        ----------
+        inCaptureIndex: int
+            The index of the image group. Must be in range(0,number of captures)
+        inMaskIndex: int
+            The index of the mask
+        inImageIndex: int
+            The Image index (or Timepoint for non montage data)
+        inReadOneScoop: int
+            If true, have SB read the whole image in one scopp, else read it a plane at a time to use much less memory 
+        ioArr: optional np uint16 array
+            An optional Numpy uint16 preallocated array to receive the mask
+            To preallocate, use something like: np.empty(theNumRows*theNumColumns*theNumPlanes,np.uint16)
+            If ioArr is not specified, the array is returned as 1D numpy uint16 array
+
+        Returns
+        -------
+        if ioArr is specified, then it will return a 0 for failure, or 1 for success
+        otherwise it will return the mask as 1D numpy uint16 array
+
+        """
+        self.SendCommand('$ReadAllMaskPlanes(CaptureIndex=i4,MaskIndex=i4,ImageIndex=i4,ReadOneScoop=i4,SendHeader=i4)')
+        self.SendVal(int(inCaptureIndex),'i4')
+        self.SendVal(int(inMaskIndex),'i4')
+        self.SendVal(int(inImageIndex),'i4')
+        self.SendVal(int(inReadOneScoop),'i4')
+        if ioArr is None:
+            theSendHeader = 1
+            self.SendVal(int(theSendHeader),'i4')
+            theNum,theVals = self.Recv()
+            return theVals
+        else:
+            theSendHeader = 0
+            self.SendVal(int(theSendHeader),'i4')
+            self.RecvDataIntoArray(ioArr)
+            return 1
+
+
+    def ReadMaskPlaneBuf(self,inCaptureIndex,inMaskIndex,inImageIndex,inZPlaneIndex,ioArr: Optional[np.ndarray] = None):
         """ Reads a z plane of a mask into a numpy array
 
         Parameters
@@ -2089,29 +2468,40 @@ class SBAccess(object):
         inCaptureIndex: int
             The index of the image group. Must be in range(0,number of captures)
         inMaskIndex: int
-            The nindex of the mask
-        inTimepointIndex: int
-            The time point
+            The index of the mask
+        inImageIndex: int
+            The Image index (or Timepoint for non montage data)
         inZPlaneIndex: int
             The z plane number
+        ioArr: 
+            An optional Numpy uint16 preallocated array to receive the mask
+            To preallocate, use something like: np.empty(theNumRows*theNumColumns,np.uint16)
+            If ioArr is not specified, the array is returned as 1D numpy uint16 array
+
         Returns
         -------
-        numpy uint16 array 
-            The mask is returned as 1D numpy uint16 array
+        if ioArr is specified, then it will return a 0 for failure, or 1 for success
+        otherwise it will return the mask as 1D numpy uint16 array
 
         """
 
-        self.SendCommand('$ReadMaskPlaneBuf(CaptureIndex=i4,MaskIndex=i4,TimepointIndex=i4,ZPlaneIndex=i4)')
+        self.SendCommand('$ReadMaskPlaneBuf(CaptureIndex=i4,MaskIndex=i4,ImageIndex=i4,ZPlaneIndex=i4)')
         self.SendVal(int(inCaptureIndex),'i4')
         self.SendVal(int(inMaskIndex),'i4')
-        self.SendVal(int(inTimepointIndex),'i4')
+        self.SendVal(int(inImageIndex),'i4')
         self.SendVal(int(inZPlaneIndex),'i4')
+        if ioArr is None:
+            theSendHeader = 1
+            self.SendVal(int(theSendHeader),'i4')
+            theNum,theVals = self.Recv()
+            return theVals
+        else:
+            theSendHeader = 0
+            self.SendVal(int(theSendHeader),'i4')
+            self.RecvDataIntoArray(ioArr)
+            return 1
 
-        theNum,theVals = self.Recv()
-        return theVals
-
-
-    def WriteMaskPlaneBuf(self,inCaptureIndex,inMaskName,inTimepointIndex,inZPlaneIndex,inNumpyArray):
+    def WriteAllMaskPlanes(self,inCaptureIndex,inMaskName,inImageIndex,inZPlaneIndex,inNumpyArray):
         """ Writes a z plane of a mask from a numpy array
 
         Parameters
@@ -2120,8 +2510,40 @@ class SBAccess(object):
             The index of the image group. Must be in range(0,number of captures)
         inMaskName: str
             The name of the mask
-        inTimepointIndex: int
-            The time point
+        inImageIndex: int
+            The image index or time point in a non montage image
+        inNumpyArray: numpy array of u2 (unsigned 16 bit integer)
+
+        Returns
+        -------
+        none
+        """
+        theBytes = inNumpyArray.tobytes()
+        lb = len(theBytes)
+        lm = len(inMaskName)
+
+        self.SendCommand('$WriteAllMaskPlanes(CaptureIndex=i4,MaskName='+str(lm)+':s,ImageIndex=i4,ByteArraySize=i8)')
+        self.SendVal(int(inCaptureIndex),'i4')
+        self.SendVal(inMaskName,'s')
+        self.SendVal(int(inImageIndex),'i4')
+        self.SendVal(int(lb),'i8')
+        self.SendByteArray(theBytes);
+
+        theNum,theVals = self.Recv()
+        if( theNum != 1 and theVals[0] != 1):
+            raise Exception("WriteAllMaskPlanes: error")
+
+    def WriteMaskPlaneBuf(self,inCaptureIndex,inMaskName,inImageIndex,inZPlaneIndex,inNumpyArray):
+        """ Writes a z plane of a mask from a numpy array
+
+        Parameters
+        ----------
+        inCaptureIndex: int
+            The index of the image group. Must be in range(0,number of captures)
+        inMaskName: str
+            The name of the mask
+        inImageIndex: int
+            The image index or time point in a non montage image
         inZPlaneIndex: int
             The z plane number
         inNumpyArray: numpy array of u2 (unsigned 16 bit integer)
@@ -2134,11 +2556,12 @@ class SBAccess(object):
         lb = len(theBytes)
         lm = len(inMaskName)
 
-        self.SendCommand('$WriteMaskPlaneBuf(CaptureIndex=i4,MaskName='+str(lm)+':s,TimepointIndex=i4,ZPlaneIndex=i4,ByteArray='+str(lb)+':b)')
+        self.SendCommand('$WriteMaskPlaneBuf(CaptureIndex=i4,MaskName='+str(lm)+':s,ImageIndex=i4,ZPlaneIndex=i4,ByteArraySize=i8)')
         self.SendVal(int(inCaptureIndex),'i4')
         self.SendVal(inMaskName,'s')
-        self.SendVal(int(inTimepointIndex),'i4')
+        self.SendVal(int(inImageIndex),'i4')
         self.SendVal(int(inZPlaneIndex),'i4')
+        self.SendVal(int(lb),'i8')
         self.SendByteArray(theBytes);
 
         theNum,theVals = self.Recv()
@@ -2259,6 +2682,48 @@ class SBAccess(object):
 
         return theVals[0]
 
+    def StartLLSCapture(self,inXML):
+        """ Starts a LLS capture with the specified XML
+        Parameters
+        ----------
+        inXML: string
+            XML description of the experiment to run
+
+        Returns
+        -------
+        int
+            the capture id. If the capture failed to start, return -1
+        """
+        l = len(inXML)
+        self.SendCommand('$StartLLSCapture(ScriptXML='+str(l)+':s)')
+        self.SendVal(inXML,'s')
+        theNum,theVals = self.Recv()
+        if( theNum != 1 or theVals[0] == -1):
+            raise Exception("StartLLSCapture: error")
+
+        return theVals[0]
+
+    def StartMLSCapture(self,inXML):
+        """ Starts a LLS capture with the specified XML
+        Parameters
+        ----------
+        inXML: string
+            XML description of the experiment to run
+
+        Returns
+        -------
+        int
+            the capture id. If the capture failed to start, return -1
+        """
+        l = len(inXML)
+        self.SendCommand('$StartMLSCapture(ScriptXML='+str(l)+':s)')
+        self.SendVal(inXML,'s')
+        theNum,theVals = self.Recv()
+        if( theNum != 1 or theVals[0] == -1):
+            raise Exception("StartMLSCapture: error")
+
+        return theVals[0]
+
     def StartCapture(self,inScriptName='Default'):
         """ Starts a capture with an optional script name
         Parameters
@@ -2301,6 +2766,26 @@ class SBAccess(object):
 
         return theVals[0]
 
+    def StartCTLSCapture(self,inXML):
+        """ Starts a CTLS capture with the provided XML script
+        Parameters
+        ----------
+        inXML: string
+            The XML script for the desired capture (can be queried by GetCTLSXML)
+
+        Returns
+        -------
+        int
+            the capture id. If the capture failed to start, return -1
+        """
+        l = len(inXML)
+        self.SendCommand('$StartCTLSCapture(ScriptXML='+str(l)+':s)')
+        self.SendVal(inXML,'s')
+        theNum,theVals = self.Recv()
+        if( theNum != 1 or theVals[0] == -1):
+            raise Exception("StartMLSCapture: error")
+
+        return theVals[0]
 
     def StopCapture(self):
         """ Stops the current capture
@@ -3290,7 +3775,7 @@ class SBAccess(object):
         else:
             return theNumPoints[0], arr, False
 
-    def SetAllXYZExperiments(self, Experiments: List[ExperimentStruct], ClearExisting):
+    def SetAllXYZExperiments(self, Experiments: list[ExperimentStruct], ClearExisting):
         """ Sets all XYZZ + experiment name + description at once, optionally clearing any existing experiments
 
         Parameters
@@ -3506,6 +3991,39 @@ class SBAccess(object):
             return True
         else:
             return False
+
+    def GetCommandList(self):
+        """ Returns a list of supported Synery commands
+
+                Parameters
+                ----------
+                Returns
+                -------
+                Commands : array of str
+                    Returns an array of strings containing supported Synergy commands
+                Success : bool
+                    True if successful, false if not
+                """
+
+        arr = []
+
+        self.SendCommand('$GetCommandList()')
+
+        theNum, theCount = self.Recv()
+
+        if( theNum != 1):
+            raise Exception("GetCommandList: error")
+
+        for id in range(theCount[0]):
+            theCommand = self.Recv()
+            arr.append(theCommand)
+
+        theNum, theResult = self.Recv()
+
+        if(theResult[0] > 0):
+            return arr, True
+        else:
+            return arr, False
 
     def GetSlideBookVersion(self):
 

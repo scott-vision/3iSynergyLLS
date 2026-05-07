@@ -9,6 +9,7 @@ import time
 import random
 from matplotlib import pyplot as plt
 from SBAccess import *
+import traceback
 #from io import StringIO
 
 #HOST = '127.0.0.1'  # Standard loopback interface address (localhost)
@@ -210,11 +211,18 @@ def test_new_slide():
 
         theOutCaptureIndex = theSbAccess.CreateImageGroup('Made By Python 2',theNumChannels,theNumPlanes,theNumRows,theNumColumns,1)
 
+        test_output_array = 1
+        if test_output_array == 1:
+            image = np.empty(theNumRows*theNumColumns,np.uint16)
         for theZPlane in range(theNumPlanes):
             for theChannel in range(theNumChannels):
                 #access the input slide
                 theSbAccess.SetTargetSlide(theInpSlideId)
-                image = theSbAccess.ReadImagePlaneBuf(theInpCaptureIndex,0,0,theZPlane,theChannel) #captureid,position,timepoint,zplane,channel
+                if test_output_array == 1:
+                    res = theSbAccess.ReadImagePlaneBuf(theInpCaptureIndex,0,0,theZPlane,theChannel,image) #captureid,position,timepoint,zplane,channel, ouArr
+                else:
+                    image = theSbAccess.ReadImagePlaneBuf(theInpCaptureIndex,0,0,theZPlane,theChannel) #captureid,position,timepoint,zplane,channel
+
                 #access the output slide
                 theSbAccess.SetTargetSlide(theOutSlideId)
                 theSbAccess.WriteImagePlaneBuf(theOutCaptureIndex,0,theZPlane,theChannel,image) #CaptureIndex,TimepointIndex,ZPlaneIndex,ChannelIndex,ByteArray
@@ -306,6 +314,145 @@ def test_plot_3dstack():
 
 
         return
+
+def test_read_all_planes_into_np():
+    HOST = '127.0.0.1'  # The server's hostname or IP address
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((HOST, PORT)) # connect to host port
+        theSbAccess = SBAccess(s) # create a SBaccess object
+        #theSbAccess.Open("E:\Data\Slides_msi\QweekTour.sldy")  #open a slide
+        slide_id = theSbAccess.GetCurrentSlideId()
+
+        theNumCaptures = theSbAccess.GetNumCaptures()  #get the number of image froups in the slide 
+        for theCapture in range(theNumCaptures):
+            theImageName = theSbAccess.GetImageName(theCapture) #get the image name
+            print('the image name for capture: ',theCapture,' is: ',theImageName)
+            theNumX = theSbAccess.GetNumXColumns(theCapture) #get the number of columns
+            print('    the num X: ',theNumX)
+
+        theCapture = 0  # work with the first image
+        theNumRows = theSbAccess.GetNumYRows(theCapture)    # get the number f rows
+        theNumColumns = theSbAccess.GetNumXColumns(theCapture) #get the number of columns
+        theNumPlanes = theSbAccess.GetNumZPlanes(theCapture) #get the number of planes
+        theVoxelX,theVoxelY,theVoxelZ = theSbAccess.GetVoxelSize(theCapture) # get the voxel sizes
+        theNumChannels = theSbAccess.GetNumChannels(theCapture) #get the number of channels
+        for theChannel in range(theNumChannels):
+            name = theSbAccess.GetChannelName(theCapture,theChannel) #get each channel name and pront it
+            print('Channel Name: ',name)
+
+        image = np.empty(theNumRows*theNumColumns*theNumPlanes,np.uint16)
+        t0 = time.perf_counter()
+        theSbAccess.ReadAllImagePlanes(theCapture,0,0,True,image) #read a plane, arguments are: capture id,image index,channel, readInOneScoop
+        t1 = time.perf_counter()
+        print(f"Elapsed time: {t1 - t0:.3f} s")
+
+        image = image.reshape(theNumPlanes,theNumRows,theNumColumns) # reshape the image as a 2D array
+
+
+        for theZPlane in range(0,theNumPlanes,int(theNumPlanes/10)):   #loop over each plane
+            print ("*** theZPlane: ",theZPlane," The read buffer len is: " , len(image))
+
+            #plot the slice
+            slice = image[theZPlane,:,:]
+
+            plt.figure()
+            plt.imshow(slice)
+            plt.pause(0.001)
+
+        data = input("Please hit Enter to exit:\n")
+        print("Done")
+
+
+        return
+
+def test_read_all_planes():
+    HOST = '127.0.0.1'  # The server's hostname or IP address
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((HOST, PORT)) # connect to host port
+        theSbAccess = SBAccess(s) # create a SBaccess object
+        #theSbAccess.Open("E:\Data\Slides_msi\QweekTour.sldy")  #open a slide
+        slide_id = theSbAccess.GetCurrentSlideId()
+
+        theNumCaptures = theSbAccess.GetNumCaptures()  #get the number of image froups in the slide 
+        for theCapture in range(theNumCaptures):
+            theImageName = theSbAccess.GetImageName(theCapture) #get the image name
+            print('the image name for capture: ',theCapture,' is: ',theImageName)
+            theNumX = theSbAccess.GetNumXColumns(theCapture) #get the number of columns
+            print('    the num X: ',theNumX)
+
+        theCapture = 0  # work with the first image
+        theNumRows = theSbAccess.GetNumYRows(theCapture)    # get the number f rows
+        theNumColumns = theSbAccess.GetNumXColumns(theCapture) #get the number of columns
+        theNumPlanes = theSbAccess.GetNumZPlanes(theCapture) #get the number of planes
+        theVoxelX,theVoxelY,theVoxelZ = theSbAccess.GetVoxelSize(theCapture) # get the voxel sizes
+        theNumChannels = theSbAccess.GetNumChannels(theCapture) #get the number of channels
+        for theChannel in range(theNumChannels):
+            name = theSbAccess.GetChannelName(theCapture,theChannel) #get each channel name and pront it
+            print('Channel Name: ',name)
+
+        t0 = time.perf_counter()
+        image = theSbAccess.ReadAllImagePlanes(theCapture,0,0,False) #read a plane, arguments are: capture id,image index,channel, readInOneScoop
+        t1 = time.perf_counter()
+        print(f"Elapsed time: {t1 - t0:.3f} s")
+
+        image = image.reshape(theNumPlanes,theNumRows,theNumColumns) # reshape the image as a 2D array
+
+
+        for theZPlane in range(0,theNumPlanes,int(theNumPlanes/1)):   #loop over each plane
+            print ("*** theZPlane: ",theZPlane," The read buffer len is: " , len(image))
+
+            #plot the slice
+            slice = image[theZPlane,:,:]
+
+            plt.figure()
+            plt.imshow(slice)
+            plt.pause(0.001)
+
+        data = input("Please hit Enter to exit:\n")
+        print("Done")
+
+
+        return
+
+def test_write_all_planes():
+    HOST = '127.0.0.1'  # The server's hostname or IP address
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((HOST, PORT))
+        theSbAccess = SBAccess(s)
+        theInpSlideId = theSbAccess.Open("E:\Data\Slides_msi\QweekTour.sldy");
+
+        theNumCaptures = theSbAccess.GetNumCaptures()
+        for theCapture in range(theNumCaptures):
+            theImageName = theSbAccess.GetImageName(theCapture)
+            print('the image name for capture: ',theCapture,' is: ',theImageName)
+            theNumX = theSbAccess.GetNumXColumns(theCapture)
+            print('    the num X: ',theNumX)
+
+        theInpCaptureIndex = 0;
+        theNumRows = theSbAccess.GetNumYRows(theInpCaptureIndex)
+        theNumColumns = theSbAccess.GetNumXColumns(theInpCaptureIndex)
+        theNumPlanes = theSbAccess.GetNumZPlanes(theInpCaptureIndex)
+        theNumChannels = theSbAccess.GetNumChannels(theInpCaptureIndex)
+
+        t0 = time.perf_counter()
+        image = theSbAccess.ReadAllImagePlanes(theInpCaptureIndex,0,0,True) #read a plane, arguments are: capture id,image index,channel, readInOneScoop
+        t1 = time.perf_counter()
+        theOutSlideId = theSbAccess.CreateNewSlide()
+        theOutCaptureIndex = theSbAccess.CreateImageGroup('Made By Python 2',theNumChannels,theNumPlanes,theNumRows,theNumColumns,1)
+        theSbAccess.WriteAllImagePlanes(theOutCaptureIndex,0,0,image)
+
+
+
+
+        data = input("Please hit Enter to exit:\n")
+        print("Done")
+
+
+        return
+
 def test_plot_mask():
     HOST = '127.0.0.1'  # The server's hostname or IP address
 
@@ -357,7 +504,7 @@ def test_send_mask():
         s.connect((HOST, PORT))
         theSbAccess = SBAccess(s)
         #theSbAccess.Open("E:\Data\Slides_msi\QweekTour.sldy");
-        theSbAccess.Open("E:\\Data\\Slides_msi\\3D Montage\\big3d.sldy");
+        theSbAccess.Open("E:\Data\Slides_msi\QweekTour.sldy");
 
         theNumCaptures = theSbAccess.GetNumCaptures()
         for theCapture in range(theNumCaptures):
@@ -794,6 +941,39 @@ def test_set_xyz_montage():
 
         theNumXY, res = theSbAccess.GetXYZPointCount()
         print("The num points", theNumXY)
+
+def test_get_camera_info():
+    HOST = '127.0.0.1'  # The server's hostname or IP address
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((HOST, PORT))
+        theSbAccess = SBAccess(s)
+
+        theCameraIndex = 1
+        theWidth, theHeight, theMicronsPerPixel, theName, theResult = theSbAccess.GetCameraProperties(theCameraIndex)
+
+        if (theResult):
+            print("Height", theHeight, "Width", theWidth, "Microns per pixel", theMicronsPerPixel, "Display name", theName)
+        else:
+            print("GetCameraProperties Camera", theCameraIndex, "Failed")
+
+        theCameraIndex = 6
+        theWidth, theHeight, theMicronsPerPixel, theName, theResult = theSbAccess.GetCameraProperties(theCameraIndex)
+
+        if (theResult):
+            print("Height", theHeight, "Width", theWidth, "Microns per pixel", theMicronsPerPixel, "Display name", theName)
+        else:
+            print("GetCameraProperties Camera", theCameraIndex, "Failed")
+
+        theCameraIndex = 7
+        theWidth, theHeight, theMicronsPerPixel, theName, theResult = theSbAccess.GetCameraProperties(theCameraIndex)
+
+        if (theResult):
+            print("Height", theHeight, "Width", theWidth, "Microns per pixel", theMicronsPerPixel, "Display name", theName)
+        else:
+            print("GetCameraProperties Camera", theCameraIndex, "Failed")
+
+
 def set_xyz_point_in_focus_xy_tab():
     HOST = '127.0.0.1'  # The server's hostname or IP address
 
@@ -1461,7 +1641,26 @@ def test_get_open_slides():
         data = input("Please hit Enter to continue after changing current slide in SlideBook:\n")
         slide_id = theSbAccess.GetCurrentSlideId()
         print("New Current Slide Id: ",slide_id)
-       
+
+def test_xml():
+    HOST = '127.0.0.1'  # The server's hostname or IP address
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((HOST, PORT))
+        theSbAccess = SBAccess(s)
+        theCurSlideId = theSbAccess.GetCurrentSlideId()
+        theSbAccess.SetTargetSlide(theCurSlideId)
+        theNumCaptures = theSbAccess.GetNumCaptures()
+        for theCapture in range(theNumCaptures):
+            theImageName = theSbAccess.GetImageName(theCapture)
+            print('the image name for capture: ',theCapture,' is: ',theImageName)
+            isLLS = theSbAccess.GetIsLLSCapture(theCapture)
+            print('Is LLS: ', isLLS)
+            if (isLLS):
+                xml, result = theSbAccess.GetLLSXML(theCapture)
+                print('XML: ', xml)
+                result = theSbAccess.StartLLSCapture(xml)
+
 def test_command_supported():
     HOST = '127.0.0.1'  # The server's hostname or IP address
 
@@ -1471,6 +1670,10 @@ def test_command_supported():
         major, minor, build, theSerial = theSbAccess.GetSlideBookVersion();
         isSupported = theSbAccess.GetIsCommandSupported("GetSlideBookVersion")
         print("Is supported:", isSupported)
+
+        theCommands, result = theSbAccess.GetCommandList()
+        for i, theName in enumerate(theCommands, start=1):
+            print(f"Command {i}: {theName}")
 
 def test_experiment_get_set():
     HOST = '127.0.0.1'  # The server's hostname or IP address
@@ -1665,7 +1868,7 @@ def test_montage_timelapse():
 
 def main():
     try:
-        #test_new_slide()
+#        test_new_slide()
         #test_plot_mask()
         #test_send_mask()
         #test_plot_3dstack()
@@ -1677,7 +1880,8 @@ def main():
         #test_add_new_channel()
         #test_copy_capture()
         #set_xyz_point_in_focus_xy_tab()
-        test_set_xyz_montage()
+        #test_set_xyz_montage()
+        #test_get_camera_info()
         #test_get_xyz_position()
         #test_start_streaming()
         #test_focus_window_parameters()
@@ -1710,12 +1914,20 @@ def main():
         #test_get_open_slides()
         #test_experiment_get_set()
         #test_definite_focus()
+        #test_xml()
         #test_command_supported()
         #test_filter_sets()
         #test_aux_data()
         #test_montage_timelapse()
+        #test_read_all_planes()
+        test_read_all_planes_into_np()
+        #test_write_all_planes()
+
     except Exception as e:
-        print(f"Error: {e}")
+        #print(f"Error: {e}")
+        print(f"error type: {type(e).__name__}")
+        print(f"error repr: {e!r}")
+        traceback.print_exc()
     except: 
         print("Error")
     finally:
