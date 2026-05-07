@@ -116,6 +116,7 @@ def run_one_capture(
     start_timeout_seconds: float,
     slide_timeout_seconds: float,
     log_polls: bool,
+    wait_for_slide_capture: bool,
 ) -> CaptureTiming:
     logging.info("Preparing %s capture %d from %s", label, sequence_index, xml_path)
     wait_until_not_capturing(sb, poll_seconds, log_polls)
@@ -209,37 +210,44 @@ def run_one_capture(
                 break
             time.sleep(poll_seconds)
 
-        slide_deadline = monotonic() + slide_timeout_seconds
-        while monotonic() <= slide_deadline:
-            captures_after = get_num_captures(sb)
-            logging.info(
-                "GetNumCaptures sequence=%d label=%s before=%s after=%s",
-                sequence_index,
-                label,
-                captures_before,
-                captures_after,
-            )
-            if (
-                captures_before is None
-                or captures_after is None
-                or captures_after > captures_before
-            ):
-                slide_available_mono = monotonic()
-                slide_available_iso = timestamp()
+        if wait_for_slide_capture:
+            slide_deadline = monotonic() + slide_timeout_seconds
+            while monotonic() <= slide_deadline:
+                captures_after = get_num_captures(sb)
                 logging.info(
-                    "SLIDE_AVAILABLE sequence=%d label=%s after_end=%.3fs",
+                    "GetNumCaptures sequence=%d label=%s before=%s after=%s",
                     sequence_index,
                     label,
-                    slide_available_mono - capture_ended_mono,
+                    captures_before,
+                    captures_after,
                 )
-                break
-            time.sleep(poll_seconds)
+                if (
+                    captures_before is None
+                    or captures_after is None
+                    or captures_after > captures_before
+                ):
+                    slide_available_mono = monotonic()
+                    slide_available_iso = timestamp()
+                    logging.info(
+                        "SLIDE_AVAILABLE sequence=%d label=%s after_end=%.3fs",
+                        sequence_index,
+                        label,
+                        slide_available_mono - capture_ended_mono,
+                    )
+                    break
+                time.sleep(poll_seconds)
 
-        if slide_available_mono is None:
-            result = "slide_timeout"
-            logging.warning(
-                "Capture ended but no new capture count appeared within %.1fs",
-                slide_timeout_seconds,
+            if slide_available_mono is None:
+                result = "slide_timeout"
+                logging.warning(
+                    "Capture ended but no new capture count appeared within %.1fs",
+                    slide_timeout_seconds,
+                )
+        else:
+            logging.info(
+                "Skipping post-capture GetNumCaptures wait sequence=%d label=%s",
+                sequence_index,
+                label,
             )
 
     except Exception as exc:
@@ -378,6 +386,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not write every IsCapturing poll to the detailed log.",
     )
+    parser.add_argument(
+        "--no-wait-for-slide-capture",
+        action="store_true",
+        help=(
+            "Start the next capture as soon as IsCapturing becomes false, "
+            "without waiting for GetNumCaptures to increase."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -454,6 +470,7 @@ def main() -> int:
                     start_timeout_seconds=float(args.start_timeout_seconds),
                     slide_timeout_seconds=float(args.slide_timeout_seconds),
                     log_polls=not bool(args.no_poll_log),
+                    wait_for_slide_capture=not bool(args.no_wait_for_slide_capture),
                 )
                 timings.append(timing)
                 if timing.result == "error":
